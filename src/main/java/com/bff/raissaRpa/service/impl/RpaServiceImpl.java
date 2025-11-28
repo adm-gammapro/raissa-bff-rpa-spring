@@ -1,16 +1,21 @@
 package com.bff.raissaRpa.service.impl;
 
-import com.bff.raissaRpa.config.SessionTokenExtractor;
 import com.bff.raissaRpa.domain.dto.request.LoginRequest;
 import com.bff.raissaRpa.domain.dto.request.ProviderLoginRequest;
 import com.bff.raissaRpa.domain.dto.response.AuthResponse;
 import com.bff.raissaRpa.domain.dto.response.DatosCuentaRpaResponse;
+import com.bff.raissaRpa.domain.dto.response.DatosMovimientosRpaResponse;
+import com.bff.raissaRpa.domain.dto.response.MovimientosRpaResponse;
+import com.bff.raissaRpa.domain.dto.response.ProviderDatosMovimientosResponse;
 import com.bff.raissaRpa.domain.dto.response.ProviderDatosSaldoResponse;
 import com.bff.raissaRpa.domain.dto.response.ProviderLoginResponse;
+import com.bff.raissaRpa.domain.dto.response.ProviderMovimientoResponse;
 import com.bff.raissaRpa.domain.dto.response.ProviderSaldoResponse;
 import com.bff.raissaRpa.domain.dto.response.SaldosRpaResponse;
 import com.bff.raissaRpa.domain.entity.Provider;
+import com.bff.raissaRpa.domain.entity.Session;
 import com.bff.raissaRpa.domain.repository.ProviderRepository;
+import com.bff.raissaRpa.domain.repository.SessionRepository;
 import com.bff.raissaRpa.exception.ApiKeyValidationException;
 import com.bff.raissaRpa.exception.ConnectionException;
 import com.bff.raissaRpa.exception.EmptyResponseException;
@@ -37,7 +42,11 @@ import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.HttpServerErrorException;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestTemplate;
+import org.springframework.web.util.UriComponentsBuilder;
 
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -48,10 +57,11 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class RpaServiceImpl implements RpaService {
     private final ProviderRepository providerRepository;
+    private final SessionRepository sessionRepository;
     private final RestTemplate restTemplate;
     private final HttpSession httpSession;
     private final KeyService keyService;
-    private final SessionTokenExtractor sessionTokenExtractor;
+
 
     @Value("${rpa.api.base-url}")
     private String rpaBaseUrl;
@@ -73,10 +83,9 @@ public class RpaServiceImpl implements RpaService {
                 throw new InvalidCredentialsException(Constantes.KEY_WRONG);
             }
 
-            String sessionKey = authResponse.getTransactionId() + "_" + apiKey + "_token";
-            String providerKey = authResponse.getTransactionId() + "_" + apiKey + "_provider";
-            httpSession.setAttribute(sessionKey, authResponse.getToken());
-            httpSession.setAttribute(providerKey, provider.getReference());
+            Session session = sessionRepository.findByTransactionId(authResponse.getTransactionId()).get();
+            session.setProvider(provider.getReference());
+            sessionRepository.save(session);
 
             log.info("Token y transactionId guardados en sesión para API Key: {} y usuario: {}", apiKey, loginRequest.getUsername());
 
@@ -100,10 +109,10 @@ public class RpaServiceImpl implements RpaService {
 
             log.info("Ejecutando logout - TransactionId: {}, API Key: {}", transactionId, apiKey);
 
-            Map<String, String> sessionData = sessionTokenExtractor.extractTokenAndProvider(transactionId, apiKey);
+            Session session = sessionRepository.findByTransactionId(transactionId).get();
 
-            String token = sessionData.get("token");
-            String providerReference = sessionData.get("providerReference");
+            String token = session.getToken();
+            String providerReference = session.getProvider();
 
             Provider provider = providerRepository
                     .findByReferenceAndActive(providerReference, (short) 1)
@@ -124,16 +133,65 @@ public class RpaServiceImpl implements RpaService {
     }
 
     @Override
+    public ProviderMovimientoResponse movimientos(String transactionId,
+                                                  String apiKey,
+                                                  String numeroCuenta,
+                                                  String fechaInicio,
+                                                  String fechaFin,
+                                                  boolean detalle) {
+        try {
+            validateApiKeyInService(apiKey);
+
+            log.info("Ejecutando logout - TransactionId: {}, API Key: {}", transactionId, apiKey);
+
+            Session session = sessionRepository.findByTransactionId(transactionId).get();
+
+            String token = session.getToken();
+            String providerReference = session.getProvider();
+
+            Provider provider = providerRepository
+                    .findByReferenceAndActive(providerReference, (short) 1)
+                    .orElseThrow(() -> new ProviderNotFoundException("Provider no encontrado o inactivo: " + providerReference));
+
+            MovimientosRpaResponse movimientosConsolidados;
+            if(provider.getHistorico() == 1) {
+                int diferenciaDias = calcularDiferenciaDias(fechaInicio, fechaFin);
+
+                if (diferenciaDias == 0) {
+                    log.info("Mismo día ({}-{}), usando solo movimientos con detalle", fechaInicio, fechaFin);
+                    movimientosConsolidados = callMovimientos(transactionId, token, provider, numeroCuenta, fechaInicio, fechaFin, detalle);
+
+                } else {
+                    log.info("Diferencia de {} días ({}-{}), combinando históricos + detalle", diferenciaDias, fechaInicio, fechaFin);
+                    movimientosConsolidados = combinarMovimientos(transactionId, token, provider, numeroCuenta, fechaInicio, fechaFin, detalle);
+                }
+            } else {
+                movimientosConsolidados = callMovimientos(transactionId, token, provider, numeroCuenta, fechaInicio, fechaFin, detalle);
+            }
+
+            return mapToProviderMovementsResponse(movimientosConsolidados);
+
+        } catch (ProviderNotFoundException | InvalidCredentialsException |
+                 ApiKeyValidationException | ConnectionException e) {
+            log.warn("Error específico en la extraccion de movimientos: {}", e.getMessage());
+            throw e;
+        } catch (Exception e) {
+            log.error("Error inesperado en la extraccion de movimientos: {}", e.getMessage(), e);
+            throw new RpaAuthenticationException("Error interno del servidor", e);
+        }
+    }
+
+    @Override
     public ProviderLoginResponse logout(String transactionId, String apiKey) {
         try {
             validateApiKeyInService(apiKey);
 
             log.info("Ejecutando logout - TransactionId: {}, API Key: {}", transactionId, apiKey);
 
-            Map<String, String> sessionData = sessionTokenExtractor.extractTokenAndProvider(transactionId, apiKey);
+            Session session = sessionRepository.findByTransactionId(transactionId).get();
 
-            String token = sessionData.get("token");
-            String providerReference = sessionData.get("providerReference");
+            String token = session.getToken();
+            String providerReference = session.getProvider();
 
             Provider provider = providerRepository
                     .findByReferenceAndActive(providerReference, (short) 1)
@@ -453,7 +511,7 @@ public class RpaServiceImpl implements RpaService {
         return null;
     }
 
-    public ProviderSaldoResponse mapToProviderResponse(SaldosRpaResponse saldosRpaResponse) {
+    private ProviderSaldoResponse mapToProviderResponse(SaldosRpaResponse saldosRpaResponse) {
         ProviderSaldoResponse providerResponse = new ProviderSaldoResponse();
 
         if (saldosRpaResponse == null) {
@@ -521,5 +579,289 @@ public class RpaServiceImpl implements RpaService {
             return "USD";
         }
         return "PEN";
+    }
+
+    private ProviderMovimientoResponse mapToProviderMovementsResponse(MovimientosRpaResponse movimientosRpaResponse) {
+        ProviderMovimientoResponse providerResponse = new ProviderMovimientoResponse();
+
+        if (movimientosRpaResponse == null) {
+            providerResponse.setStatus("error");
+            providerResponse.setMessage("Respuesta nula del servicio");
+            return providerResponse;
+        }
+
+        if (movimientosRpaResponse.isSuccess()) {
+            providerResponse.setStatus("success");
+
+            if (movimientosRpaResponse.getData() != null && !movimientosRpaResponse.getData().isEmpty()) {
+                providerResponse.setMovements(mapMovementsList(movimientosRpaResponse.getData()));
+            }
+        } else {
+            providerResponse.setStatus("error");
+            providerResponse.setMessage(getSafeMessage(movimientosRpaResponse.getMessage(), "Error en la operación"));
+        }
+
+        return providerResponse;
+    }
+
+    private MovimientosRpaResponse callMovimientos(String transactionId,
+                                                   String token,
+                                                   Provider provider,
+                                                   String numeroCuenta,
+                                                   String fechaInicio,
+                                                   String fechaFin,
+                                                   boolean detalle) {
+        String baseUrl = String.format("%s/api/%s/transacciones/%s/%s", rpaBaseUrl, provider.getRuta(), numeroCuenta, transactionId);
+
+        UriComponentsBuilder builder;
+        if(provider.getDetalle() == 1) {
+            builder = UriComponentsBuilder.fromHttpUrl(baseUrl)
+                    .queryParam("fechaInicio", fechaInicio)
+                    .queryParam("fechaFin", fechaFin)
+                    .queryParam("detalle", detalle);
+        } else {
+            builder = UriComponentsBuilder.fromHttpUrl(baseUrl)
+                    .queryParam("fechaInicio", fechaInicio)
+                    .queryParam("fechaFin", fechaFin);
+        }
+
+        String url = builder.toUriString();
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.setBearerAuth(token);
+
+        HttpEntity<Void> request = new HttpEntity<>(headers);
+
+        try {
+            ResponseEntity<MovimientosRpaResponse> response = restTemplate.exchange(
+                    url,
+                    HttpMethod.POST,
+                    request,
+                    MovimientosRpaResponse.class
+            );
+            MovimientosRpaResponse providerResponse = response.getBody();
+
+            if (providerResponse == null) {
+                log.error("Respuesta vacía del provider movimiento");
+                throw new EmptyResponseException("Respuesta vacía del provider movimiento");
+            }
+
+            if (providerResponse.isSuccess()) {
+                log.info("Extraccion de movimientos del provider exitoso: {} - TransactionId: {}",
+                        providerResponse.getMessage(), providerResponse.getTransactionId());
+
+                return providerResponse;
+
+            } else {
+                log.warn("Extraccion de movimientos falló: {} - TransactionId: {}",
+                        providerResponse.getMessage(), providerResponse.getTransactionId());
+                throw new ProviderLoginException("Error en Extraccion de movimientos del provider: " + providerResponse.getMessage());
+            }
+        } catch (HttpClientErrorException e) {
+            log.error("Error HTTP {} al llamar al provider Extraccion de movimientos: {}", e.getStatusCode(), e.getResponseBodyAsString());
+            throw new ProviderLoginException("Error HTTP " + e.getStatusCode() + " en Extraccion de movimientos del provider");
+
+        } catch (HttpServerErrorException e) {
+            log.error("Error HTTP {} del servidor provider Extraccion de movimientos: {}", e.getStatusCode(), e.getResponseBodyAsString());
+            throw new ProviderLoginException("Error del servidor provider: " + e.getStatusCode());
+
+        } catch (EmptyResponseException | ProviderLoginException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("Error inesperado al llamar al provider Extraccion de movimientos: {}", e.getMessage());
+            throw new ProviderLoginException("Error al ejecutar Extraccion de movimientos del provider: " + e.getMessage(), e);
+        }
+    }
+
+    private MovimientosRpaResponse callMovimientosHistoricos(String transactionId,
+                                                             String token,
+                                                             String providerRoute,
+                                                             String numeroCuenta,
+                                                             String fechaInicio,
+                                                             String fechaFin) {
+        String baseUrl = String.format("%s/api/%s/transacciones-historicas/%s/%s", rpaBaseUrl, providerRoute, numeroCuenta, transactionId);
+
+        UriComponentsBuilder builder = UriComponentsBuilder.fromHttpUrl(baseUrl)
+                .queryParam("fechaInicio", fechaInicio)
+                .queryParam("fechaFin", fechaFin);
+
+        String url = builder.toUriString();
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.setBearerAuth(token);
+
+        HttpEntity<Void> request = new HttpEntity<>(headers);
+
+        try {
+            ResponseEntity<MovimientosRpaResponse> response = restTemplate.exchange(
+                    url,
+                    HttpMethod.POST,
+                    request,
+                    MovimientosRpaResponse.class
+            );
+            MovimientosRpaResponse providerResponse = response.getBody();
+
+            if (providerResponse == null) {
+                log.error("Respuesta vacía del provider saldo");
+                throw new EmptyResponseException("Respuesta vacía del provider saldo");
+            }
+
+            if (providerResponse.isSuccess()) {
+                log.info("Extraccion de saldos del provider exitoso: {} - TransactionId: {}",
+                        providerResponse.getMessage(), providerResponse.getTransactionId());
+
+                return providerResponse;
+
+            } else {
+                log.warn("Extraccion de saldos falló: {} - TransactionId: {}",
+                        providerResponse.getMessage(), providerResponse.getTransactionId());
+                throw new ProviderLoginException("Error en Extraccion de saldos del provider: " + providerResponse.getMessage());
+            }
+        } catch (HttpClientErrorException e) {
+            log.error("Error HTTP {} al llamar al provider Extraccion de saldos: {}", e.getStatusCode(), e.getResponseBodyAsString());
+            throw new ProviderLoginException("Error HTTP " + e.getStatusCode() + " en Extraccion de saldos del provider");
+
+        } catch (HttpServerErrorException e) {
+            log.error("Error HTTP {} del servidor provider Extraccion de saldos: {}", e.getStatusCode(), e.getResponseBodyAsString());
+            throw new ProviderLoginException("Error del servidor provider: " + e.getStatusCode());
+
+        } catch (EmptyResponseException | ProviderLoginException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("Error inesperado al llamar al provider Extraccion de saldos: {}", e.getMessage());
+            throw new ProviderLoginException("Error al ejecutar Extraccion de saldos del provider: " + e.getMessage(), e);
+        }
+    }
+
+    private List<ProviderDatosMovimientosResponse> mapMovementsList(List<DatosMovimientosRpaResponse> movimientosRpa) {
+        List<ProviderDatosMovimientosResponse> movements = new ArrayList<>();
+
+        for (int i = 0; i < movimientosRpa.size(); i++) {
+            DatosMovimientosRpaResponse movimientoRpa = movimientosRpa.get(i);
+            if (movimientoRpa != null) {
+                movements.add(mapMovimientoToProvider(movimientoRpa, i + 1));
+            }
+        }
+
+        return movements.isEmpty() ? null : movements;
+    }
+
+    private ProviderDatosMovimientosResponse mapMovimientoToProvider(DatosMovimientosRpaResponse movimientoRpa, int consecutiveId) {
+        ProviderDatosMovimientosResponse movimiento = new ProviderDatosMovimientosResponse();
+
+        movimiento.setId(String.valueOf(consecutiveId));
+
+        movimiento.setDate(movimientoRpa.getFecha());
+
+        movimiento.setDetail(movimientoRpa.getDescripcion());
+
+        movimiento.setOperation(movimientoRpa.getOperacion());
+
+        movimiento.setValueDate(movimientoRpa.getFechaValor());
+
+        movimiento.setReference(movimientoRpa.getReferencia());
+
+        if ("CREDITO".equalsIgnoreCase(movimientoRpa.getTipo())) {
+            movimiento.setCredit(movimientoRpa.getMonto());
+            movimiento.setDebit(0.0);
+        } else if ("DEBITO".equalsIgnoreCase(movimientoRpa.getTipo())) {
+            Double montoPositivo = movimientoRpa.getMonto() != null ? Math.abs(movimientoRpa.getMonto()) : 0.0;
+            movimiento.setDebit(montoPositivo);
+            movimiento.setCredit(0.0);
+        } else {
+            movimiento.setCredit(0.0);
+            movimiento.setDebit(0.0);
+        }
+
+        return movimiento;
+    }
+
+    private int calcularDiferenciaDias(String fechaInicio, String fechaFin) {
+        try {
+            DateTimeFormatter formatter = DateTimeFormatter.ofPattern("dd/MM/yyyy");
+            LocalDate inicio = LocalDate.parse(fechaInicio, formatter);
+            LocalDate fin = LocalDate.parse(fechaFin, formatter);
+
+            long diferencia = ChronoUnit.DAYS.between(inicio, fin);
+            return (int) Math.abs(diferencia);
+
+        } catch (Exception e) {
+            log.warn("Error calculando diferencia de días, usando valor por defecto: {}", e.getMessage());
+            return 0;
+        }
+    }
+
+    private MovimientosRpaResponse combinarMovimientos(String transactionId,
+                                                       String token,
+                                                       Provider provider,
+                                                       String numeroCuenta,
+                                                       String fechaInicio,
+                                                       String fechaFin,
+                                                       boolean detalle) {
+        try {
+            DateTimeFormatter formatter = DateTimeFormatter.ofPattern("dd/MM/yyyy");
+            LocalDate fin = LocalDate.parse(fechaFin, formatter);
+            String fechaUltimoDia = fin.format(formatter);
+
+            LocalDate inicioHistoricos = LocalDate.parse(fechaInicio, formatter);
+            LocalDate finHistoricos = fin.minusDays(1);
+            String fechaInicioHistoricos = inicioHistoricos.format(formatter);
+            String fechaFinHistoricos = finHistoricos.format(formatter);
+
+            log.info("Obteniendo históricos: {} a {}", fechaInicioHistoricos, fechaFinHistoricos);
+            log.info("Obteniendo detalle último día: {}", fechaUltimoDia);
+
+            MovimientosRpaResponse movimientosHistoricos = null;
+            if (!fechaInicioHistoricos.equals(fechaUltimoDia)) {
+                movimientosHistoricos = callMovimientosHistoricos(transactionId, token, provider.getRuta(),
+                        numeroCuenta, fechaInicioHistoricos, fechaFinHistoricos);
+            }
+
+            MovimientosRpaResponse movimientosDetalle = callMovimientos(transactionId, token, provider,
+                    numeroCuenta, fechaUltimoDia, fechaUltimoDia, detalle);
+
+            return consolidarMovimientos(movimientosHistoricos, movimientosDetalle, fechaInicio, fechaFin);
+
+        } catch (Exception e) {
+            log.error("Error combinando movimientos: {}", e.getMessage());
+            // Fallback: usar solo movimientos con detalle
+            return callMovimientos(transactionId, token, provider, numeroCuenta, fechaInicio, fechaFin, detalle);
+        }
+    }
+
+    private MovimientosRpaResponse consolidarMovimientos(MovimientosRpaResponse historicos,
+                                                         MovimientosRpaResponse detalle,
+                                                         String fechaInicio,
+                                                         String fechaFin) {
+        MovimientosRpaResponse consolidado = new MovimientosRpaResponse();
+        consolidado.setSuccess(true);
+        consolidado.setMessage("Movimientos consolidados exitosamente");
+        consolidado.setFechaInicio(fechaInicio);
+        consolidado.setFechaFin(fechaFin);
+        consolidado.setTransactionId(detalle != null ? detalle.getTransactionId() :
+                historicos != null ? historicos.getTransactionId() : null);
+
+        List<DatosMovimientosRpaResponse> todosMovimientos = new ArrayList<>();
+
+        if (historicos != null && historicos.isSuccess() &&
+                historicos.getData() != null && !historicos.getData().isEmpty()) {
+            todosMovimientos.addAll(historicos.getData());
+            log.info("Agregados {} movimientos históricos", historicos.getData().size());
+        }
+
+        if (detalle != null && detalle.isSuccess() &&
+                detalle.getData() != null && !detalle.getData().isEmpty()) {
+            todosMovimientos.addAll(detalle.getData());
+            log.info("Agregados {} movimientos con detalle", detalle.getData().size());
+        }
+
+        consolidado.setData(todosMovimientos);
+        consolidado.setCount(todosMovimientos.size());
+
+        log.info("Movimientos consolidados: {} movimientos totales", todosMovimientos.size());
+
+        return consolidado;
     }
 }

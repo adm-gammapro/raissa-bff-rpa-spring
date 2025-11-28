@@ -4,6 +4,7 @@ import com.bff.raissaRpa.domain.dto.request.LoginRequest;
 import com.bff.raissaRpa.domain.dto.response.AuthResponse;
 import com.bff.raissaRpa.domain.dto.response.LoginResponse;
 import com.bff.raissaRpa.domain.dto.response.ProviderLoginResponse;
+import com.bff.raissaRpa.domain.dto.response.ProviderMovimientoResponse;
 import com.bff.raissaRpa.domain.dto.response.ProviderSaldoResponse;
 import com.bff.raissaRpa.exception.ApiKeyValidationException;
 import com.bff.raissaRpa.exception.ConnectionException;
@@ -147,41 +148,40 @@ public class RpaController {
     }
 
     @PostMapping("{account_number}/movement/{transactionId}")
-    public ResponseEntity<LoginResponse> movimientos(@RequestHeader(value = Constantes.KEY_API_KEY, required = false) String apiKey,
+    public ResponseEntity<ProviderMovimientoResponse> movimientos(@RequestHeader(value = Constantes.KEY_API_KEY, required = false) String apiKey,
                                                      @PathVariable(name = "account_number") String accountNumber,
-                                                     @PathVariable String transactionId) {
+                                                     @PathVariable String transactionId,
+                                                     @RequestParam(name = "date_start") String dateStart,
+                                                     @RequestParam(name = "date_end") String dateEnd,
+                                                     @RequestParam boolean detalle) {
         try {
             if (apiKey == null || apiKey.trim().isEmpty()) {
                 return ResponseEntity.badRequest()
-                        .body(LoginResponse.error("Missing API key"));
+                        .body(ProviderMovimientoResponse.error("Missing API key"));
             }
 
-            ProviderLoginResponse logoutResponse = rpaService.logout(transactionId, apiKey);
+            ProviderMovimientoResponse movementResponse = rpaService.movimientos(transactionId, apiKey, accountNumber, dateStart, dateEnd, detalle);
 
-            if (logoutResponse.isSuccess()) {
-                return ResponseEntity.ok(LoginResponse.logout("logged_out"));
-            } else {
-                return ResponseEntity.badRequest()
-                        .body(LoginResponse.wrongCredentials());
-            }
+            return ResponseEntity.ok()
+                    .body(movementResponse);
         } catch (InvalidCredentialsException e) {
             return ResponseEntity.badRequest()
-                    .body(LoginResponse.wrongCredentials());
+                    .body(ProviderMovimientoResponse.wrongCredentials());
         } catch (ProviderNotFoundException e) {
             return ResponseEntity.badRequest()
-                    .body(LoginResponse.error("Provider no encontrado"));
+                    .body(ProviderMovimientoResponse.error("Provider no encontrado"));
         } catch (ApiKeyValidationException e) {
             return ResponseEntity.badRequest()
-                    .body(LoginResponse.error("API Key inválida"));
+                    .body(ProviderMovimientoResponse.error("API Key inválida"));
         } catch (ConnectionException e) {
             return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
-                    .body(LoginResponse.error("Error de conexión con el servidor RPA"));
+                    .body(ProviderMovimientoResponse.error("Error de conexión con el servidor RPA"));
         } catch (RpaAuthenticationException | ProviderLoginException | EmptyResponseException e) {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(LoginResponse.error("Error interno del servidor"));
+                    .body(ProviderMovimientoResponse.error("Error interno del servidor"));
         } catch (Exception e) {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(LoginResponse.error("Error No controlado"));
+                    .body(ProviderMovimientoResponse.error("Error No controlado"));
         }
     }
 

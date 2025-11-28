@@ -4,23 +4,19 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.Data;
 
+import java.util.List;
+
 @Data
 @JsonInclude(JsonInclude.Include.NON_NULL)
-public class AuthResponse {
-    @JsonProperty("full_name")
-    private String fullName;
-
-    @JsonProperty("document_number")
-    private String documentNumber;
-
+public class MovimientosRpaResponse {
     private boolean success;
     private String message;
-
-    @JsonProperty("expires_in")
-    private Integer expiresIn;
+    private String fechaInicio;
+    private String fechaFin;
+    private Integer count;
 
     @JsonProperty("transactionId")
     private String transactionId;
 
-    private String token;
+    private List<DatosMovimientosRpaResponse> data;
 }

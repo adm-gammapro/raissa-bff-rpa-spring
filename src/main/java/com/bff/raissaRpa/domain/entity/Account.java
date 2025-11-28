@@ -6,38 +6,39 @@ import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import lombok.AllArgsConstructor;
 import lombok.Data;
+import lombok.NoArgsConstructor;
 
 import java.time.LocalDateTime;
 
-@Data
 @Entity
-@Table(name = "provider")
-public class Provider {
+@Table(name = "accounts")
+@NoArgsConstructor
+@AllArgsConstructor
+@Data
+public class Account {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Integer id;
+    private Long id;
 
-    @Column(nullable = false, length = 50)
-    private String name;
+    @Column(name = "full_name", length = 100)
+    private String fullName;
 
-    @Column(length = 50)
-    private String reference;
+    @Column(name = "document_type", length = 3)
+    private String documentType;
 
-    @Column(length = 100)
-    private String ruta;
+    @Column(name = "document_number", length = 25)
+    private String documentNumber;
 
-    @Column(columnDefinition = "smallint default 0")
-    private Short extra;
+    @Column(name = "key_access", length = 50)
+    private String keyAccess;
 
-    @Column(columnDefinition = "smallint default 0")
-    private Short detalle;
+    @Column(name = "secret_access", length = 500)
+    private String secretAccess;
 
-    @Column(columnDefinition = "smallint default 0")
-    private Short historico;
-
-    @Column(columnDefinition = "smallint default 1")
-    private Short active;
+    @Column(name = "active")
+    private Integer active = 1;
 
     @Column(name = "created_at")
     private LocalDateTime createdAt;
