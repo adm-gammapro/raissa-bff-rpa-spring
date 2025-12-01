@@ -1,5 +1,6 @@
 package com.bff.raissaRpa.controller;
 
+import com.bff.raissaRpa.domain.dto.request.DatosSaldoBff;
 import com.bff.raissaRpa.domain.dto.request.LoginRequest;
 import com.bff.raissaRpa.domain.dto.response.AuthResponse;
 import com.bff.raissaRpa.domain.dto.response.LoginResponse;
@@ -115,14 +116,18 @@ public class RpaController {
 
     @PostMapping("/account/{transactionId}")
     public ResponseEntity<ProviderSaldoResponse> saldos(@RequestHeader(value = Constantes.KEY_API_KEY, required = false) String apiKey,
-                                                        @PathVariable String transactionId) {
+                                                        @PathVariable String transactionId,
+                                                        @RequestBody(required = false) DatosSaldoBff datos) {
         try {
             if (apiKey == null || apiKey.trim().isEmpty()) {
                 return ResponseEntity.badRequest()
                         .body(ProviderSaldoResponse.error("Missing API key"));
             }
 
-            ProviderSaldoResponse saldosResponse = rpaService.saldos(transactionId, apiKey);
+            String usuario = datos != null ? datos.getCodigoUsuario() : null;
+            String cuenta = datos != null ? datos.getNumeroCuenta() : null;
+
+            ProviderSaldoResponse saldosResponse = rpaService.saldos(transactionId, apiKey, usuario, cuenta);
 
             return ResponseEntity.ok()
                     .body(saldosResponse);

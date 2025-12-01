@@ -9,7 +9,7 @@ import com.bff.raissaRpa.domain.dto.response.ProviderSaldoResponse;
 public interface RpaService {
     AuthResponse authenticateAndLogin(LoginRequest loginRequest, String apiKey);
 
-    ProviderSaldoResponse saldos(String transactionId, String apiKey);
+    ProviderSaldoResponse saldos(String transactionId, String apiKey, String usuario, String cuenta);
 
     ProviderMovimientoResponse movimientos(String transactionId,
                                            String apiKey,

@@ -36,6 +36,9 @@ public class Provider {
     @Column(columnDefinition = "smallint default 0")
     private Short historico;
 
+    @Column(columnDefinition = "smallint default 0")
+    private Short api;
+
     @Column(columnDefinition = "smallint default 1")
     private Short active;
 

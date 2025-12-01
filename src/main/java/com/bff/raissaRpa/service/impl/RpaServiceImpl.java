@@ -1,5 +1,6 @@
 package com.bff.raissaRpa.service.impl;
 
+import com.bff.raissaRpa.domain.dto.request.DatosSaldosApiRequest;
 import com.bff.raissaRpa.domain.dto.request.LoginRequest;
 import com.bff.raissaRpa.domain.dto.request.ProviderLoginRequest;
 import com.bff.raissaRpa.domain.dto.response.AuthResponse;
@@ -68,6 +69,7 @@ public class RpaServiceImpl implements RpaService {
 
     @Override
     public AuthResponse authenticateAndLogin(LoginRequest loginRequest, String apiKey) {
+        ProviderLoginResponse providerLoginResponse;
         try {
             validateApiKeyInService(apiKey);
 
@@ -83,13 +85,21 @@ public class RpaServiceImpl implements RpaService {
                 throw new InvalidCredentialsException(Constantes.KEY_WRONG);
             }
 
-            Session session = sessionRepository.findByTransactionId(authResponse.getTransactionId()).get();
-            session.setProvider(provider.getReference());
-            sessionRepository.save(session);
-
             log.info("Token y transactionId guardados en sesión para API Key: {} y usuario: {}", apiKey, loginRequest.getUsername());
 
-            callProviderLogin(provider.getRuta(), provider.getExtra(), authResponse.getTransactionId(), authResponse.getToken(), loginRequest);
+            Session session;
+            session = sessionRepository.findByTransactionId(authResponse.getTransactionId()).get();
+
+            if (provider.getApi() == 1) {
+                providerLoginResponse = callProviderApi(provider.getRuta(), provider.getExtra(), authResponse.getTransactionId(), authResponse.getToken(), loginRequest);
+                session.setTokenAlterno(providerLoginResponse.getTokenAlterno());
+                session.setSessionToken(providerLoginResponse.getSessionToken());
+            } else {
+                callProviderLogin(provider.getRuta(), provider.getExtra(), authResponse.getTransactionId(), authResponse.getToken(), loginRequest);
+            }
+
+            session.setProvider(provider.getReference());
+            sessionRepository.save(session);
 
             return authResponse;
 
@@ -103,11 +113,11 @@ public class RpaServiceImpl implements RpaService {
     }
 
     @Override
-    public ProviderSaldoResponse saldos(String transactionId, String apiKey) {
+    public ProviderSaldoResponse saldos(String transactionId, String apiKey, String usuario, String cuenta) {
         try {
             validateApiKeyInService(apiKey);
 
-            log.info("Ejecutando logout - TransactionId: {}, API Key: {}", transactionId, apiKey);
+            log.info("Ejecutando extraccion de saldos - TransactionId: {}, API Key: {}", transactionId, apiKey);
 
             Session session = sessionRepository.findByTransactionId(transactionId).get();
 
@@ -118,7 +128,18 @@ public class RpaServiceImpl implements RpaService {
                     .findByReferenceAndActive(providerReference, (short) 1)
                     .orElseThrow(() -> new ProviderNotFoundException("Provider no encontrado o inactivo: " + providerReference));
 
-            SaldosRpaResponse saldos = callSaldos(transactionId, token, provider.getRuta());
+            SaldosRpaResponse saldos;
+            if (provider.getApi() == 1) {
+                saldos = callSaldosApi(transactionId,
+                        token,
+                        provider.getRuta(),
+                        session.getTokenAlterno(),
+                        session.getSessionToken(),
+                        usuario,
+                        cuenta);
+            } else {
+                saldos = callSaldos(transactionId, token, provider.getRuta());
+            }
 
             return mapToProviderResponse(saldos);
 
@@ -359,6 +380,60 @@ public class RpaServiceImpl implements RpaService {
         }
     }
 
+    private ProviderLoginResponse callProviderApi(String providerRoute,
+                                                  Short indicadorExtraDato,
+                                                  String transactionId,
+                                                  String token,
+                                                  LoginRequest loginRequest) {
+        String url = String.format("%s/api/%s/login/%s", rpaBaseUrl, providerRoute, transactionId);
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.setBearerAuth(token);
+
+        ProviderLoginRequest providerRequestBody = createProviderRequestBody(indicadorExtraDato, loginRequest);
+        HttpEntity<ProviderLoginRequest> request = new HttpEntity<>(providerRequestBody, headers);
+
+        log.info("Llamando al login del provider: {} con indicadorExtraDato: {}", url, indicadorExtraDato);
+        log.info("Body enviado al provider: {}", providerRequestBody);
+
+        try {
+            ResponseEntity<ProviderLoginResponse> response = restTemplate.exchange(
+                    url,
+                    HttpMethod.POST,
+                    request,
+                    ProviderLoginResponse.class
+            );
+            ProviderLoginResponse providerResponse = response.getBody();
+
+            if (providerResponse != null) {
+                if (providerResponse.isSuccess()) {
+                    log.info("Login del provider exitoso: {} - TransactionId: {}",
+                            providerResponse.getMessage(), providerResponse.getTransactionId());
+                } else {
+                    throw new ProviderLoginException("Error en login del provider: " + providerResponse.getMessage());
+                }
+            } else {
+                throw new EmptyResponseException("Respuesta vacía del provider login");
+            }
+
+            return providerResponse;
+        } catch (HttpClientErrorException e) {
+            log.error("Error HTTP {} al llamar al provider login: {}", e.getStatusCode(), e.getResponseBodyAsString());
+            throw new ProviderLoginException("Error HTTP " + e.getStatusCode() + " en login del provider");
+
+        } catch (HttpServerErrorException e) {
+            log.error("Error HTTP {} del servidor provider: {}", e.getStatusCode(), e.getResponseBodyAsString());
+            throw new ProviderLoginException("Error del servidor provider: " + e.getStatusCode());
+
+        } catch (EmptyResponseException | ProviderLoginException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("Error inesperado al llamar al provider login: {}", e.getMessage());
+            throw new ProviderLoginException("Error al ejecutar login del provider: " + e.getMessage(), e);
+        }
+    }
+
     private SaldosRpaResponse callSaldos(String transactionId, String token, String providerRoute) {
         String url = String.format("%s/api/%s/saldo/%s", rpaBaseUrl, providerRoute, transactionId);
 
@@ -367,6 +442,68 @@ public class RpaServiceImpl implements RpaService {
         headers.setBearerAuth(token);
 
         HttpEntity<Void> request = new HttpEntity<>(headers);
+
+        try {
+            ResponseEntity<SaldosRpaResponse> response = restTemplate.exchange(
+                    url,
+                    HttpMethod.POST,
+                    request,
+                    SaldosRpaResponse.class
+            );
+            SaldosRpaResponse providerResponse = response.getBody();
+
+            if (providerResponse == null) {
+                log.error("Respuesta vacía del provider saldo");
+                throw new EmptyResponseException("Respuesta vacía del provider saldo");
+            }
+
+            if (providerResponse.isSuccess()) {
+                log.info("Extraccion de saldos del provider exitoso: {} - TransactionId: {}",
+                        providerResponse.getMessage(), providerResponse.getTransactionId());
+
+                return providerResponse;
+
+            } else {
+                log.warn("Extraccion de saldos falló: {} - TransactionId: {}",
+                        providerResponse.getMessage(), providerResponse.getTransactionId());
+                throw new ProviderLoginException("Error en Extraccion de saldos del provider: " + providerResponse.getMessage());
+            }
+        } catch (HttpClientErrorException e) {
+            log.error("Error HTTP {} al llamar al provider Extraccion de saldos: {}", e.getStatusCode(), e.getResponseBodyAsString());
+            throw new ProviderLoginException("Error HTTP " + e.getStatusCode() + " en Extraccion de saldos del provider");
+
+        } catch (HttpServerErrorException e) {
+            log.error("Error HTTP {} del servidor provider Extraccion de saldos: {}", e.getStatusCode(), e.getResponseBodyAsString());
+            throw new ProviderLoginException("Error del servidor provider: " + e.getStatusCode());
+
+        } catch (EmptyResponseException | ProviderLoginException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("Error inesperado al llamar al provider Extraccion de saldos: {}", e.getMessage());
+            throw new ProviderLoginException("Error al ejecutar Extraccion de saldos del provider: " + e.getMessage(), e);
+        }
+    }
+
+    private SaldosRpaResponse callSaldosApi(String transactionId,
+                                            String token,
+                                            String providerRoute,
+                                            String tokenAlterno,
+                                            String sessionToken,
+                                            String usuario,
+                                            String cuenta) {
+        String url = String.format("%s/api/%s/saldo/%s", rpaBaseUrl, providerRoute, transactionId);
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.setBearerAuth(token);
+
+        DatosSaldosApiRequest datosRequest = new DatosSaldosApiRequest();
+        datosRequest.setTokenAlterno(tokenAlterno);
+        datosRequest.setSessionToken(sessionToken);
+        datosRequest.setCodigoUsuario(usuario);
+        datosRequest.setNumeroCuenta(cuenta);
+
+        HttpEntity<DatosSaldosApiRequest> request = new HttpEntity<>(datosRequest,headers);
 
         try {
             ResponseEntity<SaldosRpaResponse> response = restTemplate.exchange(

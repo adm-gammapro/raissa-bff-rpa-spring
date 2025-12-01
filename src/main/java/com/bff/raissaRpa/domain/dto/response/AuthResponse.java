@@ -23,4 +23,7 @@ public class AuthResponse {
     private String transactionId;
 
     private String token;
+
+    @JsonProperty("SessionToken")
+    private String sessionToken;
 }

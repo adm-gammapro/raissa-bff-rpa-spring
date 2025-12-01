@@ -35,7 +35,7 @@ public class Session {
     @JoinColumn(name = "account_id")
     private Account account;
 
-    @Column(name = "token", length = 500)
+    @Column(name = "token", length = 2000)
     private String token;
 
     @Column(name = "transaction_id", length = 100)
@@ -43,6 +43,12 @@ public class Session {
 
     @Column(name = "provider", length = 50)
     private String provider;
+
+    @Column(name = "session_token", length = 200)
+    private String sessionToken;
+
+    @Column(name = "token_alterno", length = 2000)
+    private String tokenAlterno;
 
     @Column(name = "active")
     private Integer active = 1;
