@@ -158,6 +158,7 @@ public class RpaController {
                                                      @PathVariable String transactionId,
                                                      @RequestParam(name = "date_start") String dateStart,
                                                      @RequestParam(name = "date_end") String dateEnd,
+                                                     @RequestParam(name = "usuario", required = false) String usuario,
                                                      @RequestParam boolean detalle) {
         try {
             if (apiKey == null || apiKey.trim().isEmpty()) {
@@ -165,7 +166,7 @@ public class RpaController {
                         .body(ProviderMovimientoResponse.error("Missing API key"));
             }
 
-            ProviderMovimientoResponse movementResponse = rpaService.movimientos(transactionId, apiKey, accountNumber, dateStart, dateEnd, detalle);
+            ProviderMovimientoResponse movementResponse = rpaService.movimientos(transactionId, apiKey, accountNumber, dateStart, dateEnd, usuario, detalle);
 
             return ResponseEntity.ok()
                     .body(movementResponse);

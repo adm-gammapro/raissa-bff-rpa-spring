@@ -63,6 +63,8 @@ public class RpaServiceImpl implements RpaService {
     private final HttpSession httpSession;
     private final KeyService keyService;
 
+    private static final DateTimeFormatter ENTRADA = DateTimeFormatter.ofPattern("dd/MM/yyyy");
+    private static final DateTimeFormatter SALIDA = DateTimeFormatter.ofPattern("yyyy-MM-dd");
 
     @Value("${rpa.api.base-url}")
     private String rpaBaseUrl;
@@ -159,11 +161,12 @@ public class RpaServiceImpl implements RpaService {
                                                   String numeroCuenta,
                                                   String fechaInicio,
                                                   String fechaFin,
+                                                  String usuario,
                                                   boolean detalle) {
         try {
             validateApiKeyInService(apiKey);
 
-            log.info("Ejecutando logout - TransactionId: {}, API Key: {}", transactionId, apiKey);
+            log.info("Ejecutando obtencion de movimientos - TransactionId: {}, API Key: {}", transactionId, apiKey);
 
             Session session = sessionRepository.findByTransactionId(transactionId).get();
 
@@ -175,19 +178,52 @@ public class RpaServiceImpl implements RpaService {
                     .orElseThrow(() -> new ProviderNotFoundException("Provider no encontrado o inactivo: " + providerReference));
 
             MovimientosRpaResponse movimientosConsolidados;
-            if(provider.getHistorico() == 1) {
-                int diferenciaDias = calcularDiferenciaDias(fechaInicio, fechaFin);
+            if(provider.getApi() == 1) {
+                String fechaInicioFormateada = formatearFecha(fechaInicio);
+                String fechaFinFormateada    = formatearFecha(fechaFin);
 
-                if (diferenciaDias == 0) {
-                    log.info("Mismo día ({}-{}), usando solo movimientos con detalle", fechaInicio, fechaFin);
-                    movimientosConsolidados = callMovimientos(transactionId, token, provider, numeroCuenta, fechaInicio, fechaFin, detalle);
-
-                } else {
-                    log.info("Diferencia de {} días ({}-{}), combinando históricos + detalle", diferenciaDias, fechaInicio, fechaFin);
-                    movimientosConsolidados = combinarMovimientos(transactionId, token, provider, numeroCuenta, fechaInicio, fechaFin, detalle);
-                }
+                movimientosConsolidados = callMovimientosApi(transactionId,
+                        token,
+                        provider,
+                        numeroCuenta,
+                        fechaInicioFormateada,
+                        fechaFinFormateada,
+                        session.getTokenAlterno(),
+                        session.getSessionToken(),
+                        usuario);
             } else {
-                movimientosConsolidados = callMovimientos(transactionId, token, provider, numeroCuenta, fechaInicio, fechaFin, detalle);
+                if (provider.getHistorico() == 1) {
+                    int diferenciaDias = calcularDiferenciaDias(fechaInicio, fechaFin);
+
+                    DateTimeFormatter fmt = DateTimeFormatter.ofPattern("dd/MM/yyyy");
+                    LocalDate fin = LocalDate.parse(fechaFin, fmt);
+                    LocalDate hoy = LocalDate.now();
+
+                    if (fin.isEqual(hoy)) {
+                        if (diferenciaDias == 0) {
+                            log.info("Mismo día ({}-{}), usando solo movimientos con detalle", fechaInicio, fechaFin);
+                            movimientosConsolidados = callMovimientos(transactionId, token, provider, numeroCuenta, fechaInicio, fechaFin, detalle);
+                        } else {
+                            log.info("fechaFin es hoy y diferencia de {} días ({}-{}), combinando históricos + detalle", diferenciaDias, fechaInicio, fechaFin);
+                            movimientosConsolidados = combinarMovimientos(transactionId, token, provider, numeroCuenta, fechaInicio, fechaFin, detalle);
+                        }
+                    } else if (fin.isBefore(hoy)) {
+                        // fechaFin es anterior a hoy
+                        log.info("fechaFin ({}) es anterior a hoy ({}), combinando históricos + detalle", fechaFin, hoy.format(fmt));
+                        movimientosConsolidados = combinarMovimientos(transactionId, token, provider, numeroCuenta, fechaInicio, fechaFin, detalle);
+                    } else {
+                        // fechaFin en el futuro: aplica la misma lógica que cuando es hoy
+                        if (diferenciaDias == 0) {
+                            log.info("Mismo día ({}-{}), usando solo movimientos con detalle", fechaInicio, fechaFin);
+                            movimientosConsolidados = callMovimientos(transactionId, token, provider, numeroCuenta, fechaInicio, fechaFin, detalle);
+                        } else {
+                            log.info("fechaFin futura y diferencia de {} días ({}-{}), combinando históricos + detalle", diferenciaDias, fechaInicio, fechaFin);
+                            movimientosConsolidados = combinarMovimientos(transactionId, token, provider, numeroCuenta, fechaInicio, fechaFin, detalle);
+                        }
+                    }
+                } else {
+                    movimientosConsolidados = callMovimientos(transactionId, token, provider, numeroCuenta, fechaInicio, fechaFin, detalle);
+                }
             }
 
             return mapToProviderMovementsResponse(movimientosConsolidados);
@@ -872,6 +908,75 @@ public class RpaServiceImpl implements RpaService {
         }
     }
 
+    private MovimientosRpaResponse callMovimientosApi(String transactionId,
+                                                      String token,
+                                                      Provider provider,
+                                                      String numeroCuenta,
+                                                      String fechaInicio,
+                                                      String fechaFin,
+                                                      String tokenAlterno,
+                                                      String sessionToken,
+                                                      String usuario) {
+        String baseUrl = String.format("%s/api/%s/transacciones/%s/%s", rpaBaseUrl, provider.getRuta(), numeroCuenta, transactionId);
+
+        UriComponentsBuilder builder;
+        builder = UriComponentsBuilder.fromHttpUrl(baseUrl)
+                .queryParam("fechaInicio", fechaInicio)
+                .queryParam("fechaFin", fechaFin)
+                .queryParam("tokenAlterno", tokenAlterno)
+                .queryParam("sessionToken", sessionToken)
+                .queryParam("usuario", usuario);
+
+
+        String url = builder.toUriString();
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.setBearerAuth(token);
+
+        HttpEntity<Void> request = new HttpEntity<>(headers);
+
+        try {
+            ResponseEntity<MovimientosRpaResponse> response = restTemplate.exchange(
+                    url,
+                    HttpMethod.POST,
+                    request,
+                    MovimientosRpaResponse.class
+            );
+            MovimientosRpaResponse providerResponse = response.getBody();
+
+            if (providerResponse == null) {
+                log.error("Respuesta vacía del provider movimiento");
+                throw new EmptyResponseException("Respuesta vacía del provider movimiento");
+            }
+
+            if (providerResponse.isSuccess()) {
+                log.info("Extraccion de movimientos del provider exitoso: {} - TransactionId: {}",
+                        providerResponse.getMessage(), providerResponse.getTransactionId());
+
+                return providerResponse;
+
+            } else {
+                log.warn("Extraccion de movimientos falló: {} - TransactionId: {}",
+                        providerResponse.getMessage(), providerResponse.getTransactionId());
+                throw new ProviderLoginException("Error en Extraccion de movimientos del provider: " + providerResponse.getMessage());
+            }
+        } catch (HttpClientErrorException e) {
+            log.error("Error HTTP {} al llamar al provider Extraccion de movimientos: {}", e.getStatusCode(), e.getResponseBodyAsString());
+            throw new ProviderLoginException("Error HTTP " + e.getStatusCode() + " en Extraccion de movimientos del provider");
+
+        } catch (HttpServerErrorException e) {
+            log.error("Error HTTP {} del servidor provider Extraccion de movimientos: {}", e.getStatusCode(), e.getResponseBodyAsString());
+            throw new ProviderLoginException("Error del servidor provider: " + e.getStatusCode());
+
+        } catch (EmptyResponseException | ProviderLoginException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("Error inesperado al llamar al provider Extraccion de movimientos: {}", e.getMessage());
+            throw new ProviderLoginException("Error al ejecutar Extraccion de movimientos del provider: " + e.getMessage(), e);
+        }
+    }
+
     private List<ProviderDatosMovimientosResponse> mapMovementsList(List<DatosMovimientosRpaResponse> movimientosRpa) {
         List<ProviderDatosMovimientosResponse> movements = new ArrayList<>();
 
@@ -940,31 +1045,44 @@ public class RpaServiceImpl implements RpaService {
         try {
             DateTimeFormatter formatter = DateTimeFormatter.ofPattern("dd/MM/yyyy");
             LocalDate fin = LocalDate.parse(fechaFin, formatter);
-            String fechaUltimoDia = fin.format(formatter);
+            LocalDate inicio = LocalDate.parse(fechaInicio, formatter);
+            LocalDate hoy = LocalDate.now();
 
-            LocalDate inicioHistoricos = LocalDate.parse(fechaInicio, formatter);
-            LocalDate finHistoricos = fin.minusDays(1);
-            String fechaInicioHistoricos = inicioHistoricos.format(formatter);
-            String fechaFinHistoricos = finHistoricos.format(formatter);
+            boolean finEsHoy = fin.isEqual(hoy);
 
-            log.info("Obteniendo históricos: {} a {}", fechaInicioHistoricos, fechaFinHistoricos);
-            log.info("Obteniendo detalle último día: {}", fechaUltimoDia);
+            if (finEsHoy) {
+                LocalDate finHistoricos = fin.minusDays(1);
+                MovimientosRpaResponse movimientosHistoricos = null;
+                if (!finHistoricos.isBefore(inicio)) {
+                    String fechaInicioHistoricos = inicio.format(formatter);
+                    String fechaFinHistoricos = finHistoricos.format(formatter);
+                    log.info("Obteniendo históricos: {} a {}", fechaInicioHistoricos, fechaFinHistoricos);
+                    movimientosHistoricos = callMovimientosHistoricos(
+                            transactionId, token, provider.getRuta(),
+                            numeroCuenta, fechaInicioHistoricos, fechaFinHistoricos);
+                }
 
-            MovimientosRpaResponse movimientosHistoricos = null;
-            if (!fechaInicioHistoricos.equals(fechaUltimoDia)) {
-                movimientosHistoricos = callMovimientosHistoricos(transactionId, token, provider.getRuta(),
+                String fechaUltimoDia = fin.format(formatter);
+                log.info("Obteniendo detalle último día: {}", fechaUltimoDia);
+                MovimientosRpaResponse movimientosDetalle = callMovimientos(
+                        transactionId, token, provider,
+                        numeroCuenta, fechaUltimoDia, fechaUltimoDia, detalle);
+
+                return consolidarMovimientos(movimientosHistoricos, movimientosDetalle, fechaInicio, fechaFin);
+
+            } else {
+                String fechaInicioHistoricos = inicio.format(formatter);
+                String fechaFinHistoricos = fin.format(formatter);
+                log.info("Obteniendo históricos (sin último día detalle): {} a {}", fechaInicioHistoricos, fechaFinHistoricos);
+
+                return callMovimientosHistoricos(
+                        transactionId, token, provider.getRuta(),
                         numeroCuenta, fechaInicioHistoricos, fechaFinHistoricos);
             }
 
-            MovimientosRpaResponse movimientosDetalle = callMovimientos(transactionId, token, provider,
-                    numeroCuenta, fechaUltimoDia, fechaUltimoDia, detalle);
-
-            return consolidarMovimientos(movimientosHistoricos, movimientosDetalle, fechaInicio, fechaFin);
-
         } catch (Exception e) {
             log.error("Error combinando movimientos: {}", e.getMessage());
-            // Fallback: usar solo movimientos con detalle
-            return callMovimientos(transactionId, token, provider, numeroCuenta, fechaInicio, fechaFin, detalle);
+            return null;
         }
     }
 
@@ -1000,5 +1118,12 @@ public class RpaServiceImpl implements RpaService {
         log.info("Movimientos consolidados: {} movimientos totales", todosMovimientos.size());
 
         return consolidado;
+    }
+
+    private String formatearFecha(String fecha) {
+        if (fecha == null || fecha.isBlank()) {
+            return null;
+        }
+        return LocalDate.parse(fecha, ENTRADA).format(SALIDA);
     }
 }

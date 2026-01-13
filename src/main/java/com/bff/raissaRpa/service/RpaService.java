@@ -16,6 +16,7 @@ public interface RpaService {
                                            String numeroCuenta,
                                            String fechaInicio,
                                            String fechaFin,
+                                           String usuario,
                                            boolean detalle);
 
     ProviderLoginResponse logout(String transactionId, String apiKey);
