@@ -147,10 +147,10 @@ public class RpaServiceImpl implements RpaService {
 
         } catch (ProviderNotFoundException | InvalidCredentialsException |
                  ApiKeyValidationException | ConnectionException e) {
-            log.warn("Error específico en logout: {}", e.getMessage());
+            log.warn("Error específico en saldos: {}", e.getMessage());
             throw e;
         } catch (Exception e) {
-            log.error("Error inesperado en logout: {}", e.getMessage(), e);
+            log.error("Error inesperado en saldos: {}", e.getMessage(), e);
             throw new RpaAuthenticationException("Error interno del servidor", e);
         }
     }
@@ -392,7 +392,7 @@ public class RpaServiceImpl implements RpaService {
 
             if (providerResponse != null) {
                 if (providerResponse.isSuccess()) {
-                    log.info("Login del provider exitoso: {} - TransactionId: {}",
+                    log.info("Login del provider login exitoso: {} - TransactionId: {}",
                             providerResponse.getMessage(), providerResponse.getTransactionId());
                 } else {
                     throw new ProviderLoginException("Error en login del provider: " + providerResponse.getMessage());
@@ -405,7 +405,7 @@ public class RpaServiceImpl implements RpaService {
             throw new ProviderLoginException("Error HTTP " + e.getStatusCode() + " en login del provider");
 
         } catch (HttpServerErrorException e) {
-            log.error("Error HTTP {} del servidor provider: {}", e.getStatusCode(), e.getResponseBodyAsString());
+            log.error("Error HTTP {} del servidor provider login: {}", e.getStatusCode(), e.getResponseBodyAsString());
             throw new ProviderLoginException("Error del servidor provider: " + e.getStatusCode());
 
         } catch (EmptyResponseException | ProviderLoginException e) {
@@ -551,33 +551,33 @@ public class RpaServiceImpl implements RpaService {
             SaldosRpaResponse providerResponse = response.getBody();
 
             if (providerResponse == null) {
-                log.error("Respuesta vacía del provider saldo");
+                log.error("Respuesta vacía del provider saldo api");
                 throw new EmptyResponseException("Respuesta vacía del provider saldo");
             }
 
             if (providerResponse.isSuccess()) {
-                log.info("Extraccion de saldos del provider exitoso: {} - TransactionId: {}",
+                log.info("Extraccion de saldos del provider api exitoso: {} - TransactionId: {}",
                         providerResponse.getMessage(), providerResponse.getTransactionId());
 
                 return providerResponse;
 
             } else {
-                log.warn("Extraccion de saldos falló: {} - TransactionId: {}",
+                log.warn("Extraccion de saldos api falló: {} - TransactionId: {}",
                         providerResponse.getMessage(), providerResponse.getTransactionId());
                 throw new ProviderLoginException("Error en Extraccion de saldos del provider: " + providerResponse.getMessage());
             }
         } catch (HttpClientErrorException e) {
-            log.error("Error HTTP {} al llamar al provider Extraccion de saldos: {}", e.getStatusCode(), e.getResponseBodyAsString());
+            log.error("Error HTTP {} al llamar al provider Extraccion de saldos api: {}", e.getStatusCode(), e.getResponseBodyAsString());
             throw new ProviderLoginException("Error HTTP " + e.getStatusCode() + " en Extraccion de saldos del provider");
 
         } catch (HttpServerErrorException e) {
-            log.error("Error HTTP {} del servidor provider Extraccion de saldos: {}", e.getStatusCode(), e.getResponseBodyAsString());
+            log.error("Error HTTP {} del servidor provider Extraccion de saldos api: {}", e.getStatusCode(), e.getResponseBodyAsString());
             throw new ProviderLoginException("Error del servidor provider: " + e.getStatusCode());
 
         } catch (EmptyResponseException | ProviderLoginException e) {
             throw e;
         } catch (Exception e) {
-            log.error("Error inesperado al llamar al provider Extraccion de saldos: {}", e.getMessage());
+            log.error("Error inesperado al llamar al provider Extraccion de saldos api: {}", e.getMessage());
             throw new ProviderLoginException("Error al ejecutar Extraccion de saldos del provider: " + e.getMessage(), e);
         }
     }
@@ -821,18 +821,18 @@ public class RpaServiceImpl implements RpaService {
             }
 
             if (providerResponse.isSuccess()) {
-                log.info("Extraccion de movimientos del provider exitoso: {} - TransactionId: {}",
+                log.info("Extraccion de movimientos del provider de movimientos exitoso: {} - TransactionId: {}",
                         providerResponse.getMessage(), providerResponse.getTransactionId());
 
                 return providerResponse;
 
             } else {
-                log.warn("Extraccion de movimientos falló: {} - TransactionId: {}",
+                log.warn("Extraccion de provider de movimientos falló: {} - TransactionId: {}",
                         providerResponse.getMessage(), providerResponse.getTransactionId());
                 throw new ProviderLoginException("Error en Extraccion de movimientos del provider: " + providerResponse.getMessage());
             }
         } catch (HttpClientErrorException e) {
-            log.error("Error HTTP {} al llamar al provider Extraccion de movimientos: {}", e.getStatusCode(), e.getResponseBodyAsString());
+            log.error("Error HTTP {} al llamar al provider provider de Extraccion de movimientos: {}", e.getStatusCode(), e.getResponseBodyAsString());
             throw new ProviderLoginException("Error HTTP " + e.getStatusCode() + " en Extraccion de movimientos del provider");
 
         } catch (HttpServerErrorException e) {
@@ -966,13 +966,13 @@ public class RpaServiceImpl implements RpaService {
             throw new ProviderLoginException("Error HTTP " + e.getStatusCode() + " en Extraccion de movimientos del provider");
 
         } catch (HttpServerErrorException e) {
-            log.error("Error HTTP {} del servidor provider Extraccion de movimientos: {}", e.getStatusCode(), e.getResponseBodyAsString());
+            log.error("Error HTTP {} del servidor provider Extraccion de movimientos api: {}", e.getStatusCode(), e.getResponseBodyAsString());
             throw new ProviderLoginException("Error del servidor provider: " + e.getStatusCode());
 
         } catch (EmptyResponseException | ProviderLoginException e) {
             throw e;
         } catch (Exception e) {
-            log.error("Error inesperado al llamar al provider Extraccion de movimientos: {}", e.getMessage());
+            log.error("Error inesperado al llamar al provider Extraccion de movimientos api: {}", e.getMessage());
             throw new ProviderLoginException("Error al ejecutar Extraccion de movimientos del provider: " + e.getMessage(), e);
         }
     }
